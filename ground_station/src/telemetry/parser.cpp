@@ -8,6 +8,7 @@
 #include <cmath>
 #include "console.hpp"
 #include "crc.hpp"
+#include "remote/remote_config_protocol.hpp"
 
 namespace {
 constexpr uint32_t kRadioPayloadLength = 16U;
@@ -90,7 +91,12 @@ void Parser::cmdRX(uint8_t *args, uint32_t length) {
   if (!isTelemetryPayloadLengthValid(length)) {
     return;
   }
-  data->commit(args, sizeof(packedRXMessage));
+  // Vega remote configuration frames replace single telemetry packets during a
+  // Ground Station configuration session. They are never telemetry.
+  const bool configFrame = remote_config::DownlinkTypeOf(args, length) != remote_config::DownlinkType::kNone;
+  if (!configFrame) {
+    data->commit(args, sizeof(packedRXMessage));
+  }
   const uint32_t now = millis();
   portENTER_CRITICAL(&diagnosticsMux);
   auto &stats = observation.radio;
@@ -98,6 +104,12 @@ void Parser::cmdRX(uint8_t *args, uint32_t length) {
   stats.maxGapMs = std::max(stats.maxGapMs, now - stats.lastPacketMs);
   stats.lastPacketMs = now;
   portEXIT_CRITICAL(&diagnosticsMux);
+  if (auto *remote = remoteSink.load(); remote != nullptr) {
+    remote->onRadioPacket(source, args, configFrame);
+  }
+  if (configFrame) {
+    return;
+  }
   if (sink != nullptr) {
     sink->onTelemetryPacket(data->getRxData(), source);
   }

@@ -23,6 +23,7 @@ enum settings_button_action_e {
   BUTTON_ACTION_UPDATE_FIRMWARE,
   BUTTON_ACTION_SELF_TEST,
   BUTTON_ACTION_VERSION,
+  BUTTON_ACTION_VEGA_CONFIG,
 };
 
 struct settings_min_max_t {
@@ -94,11 +95,12 @@ enum {
   SETTING_TELEMETRY = 0,
   SETTING_PREFERENCES,
   SETTING_SYSTEM,
+  SETTING_VEGA,
   kSettingPages,
 };
 
-const char* const settingPageName[kSettingPages] = {"Telemetry", "Preferences", "System"};
+const char* const settingPageName[kSettingPages] = {"Telemetry", "Preferences", "System", "Vega"};
 
 extern const device_settings_t settingsTable[][4];
 
-const uint16_t settingsTableValueCount[kSettingPages] = {4, 4, 4};
+const uint16_t settingsTableValueCount[kSettingPages] = {4, 4, 4, 1};

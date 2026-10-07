@@ -64,4 +64,9 @@ extern event_action_map_elem_t* event_action_map;
 inline constexpr const char* board_name = "CATS Vega";
 extern char telemetry_code_version[20];
 
+/* Testing mode value stored in the configuration, before boot-time overrides (test button, Ground Station). */
+extern bool global_configured_testing_mode;
+/* Changes on every boot; protects destructive Ground Station requests against stale radio frames. */
+extern uint8_t global_boot_token;
+
 // NOLINTEND(cppcoreguidelines-avoid-non-const-global-variables)

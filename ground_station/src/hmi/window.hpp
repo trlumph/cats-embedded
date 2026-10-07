@@ -66,7 +66,7 @@ class Window {
   bool showLocationQr(float latitude, float longitude, const char *label, bool hasPreviousPage, bool hasNextPage);
 
   void initTesting();
-  void initTestingConfirmed(bool connected, bool testingEnabled);
+  void initTestingConfirmed(bool connected, bool testingEnabled, bool canRestartInTesting = false);
   void initTestingFailed();
   void initTestingWait();
   void initTestingReady();
@@ -112,6 +112,19 @@ class Window {
   void dataShowFlightStatistics(FlightStatistics &stats1, FlightStatistics &stats2, const char *logName,
                                 bool hasNextPage);
 
+  // Vega remote configuration
+  struct ListRow {
+    const char *left;
+    const char *right;
+  };
+  static constexpr size_t kListRows = 8;
+  void vegaConfigList(const char *title, const ListRow *rows, size_t count, size_t selected, bool hasPrevious,
+                      bool hasNext, const char *actionLabel, const char *hint);
+  void vegaConfigProgress(const char *title, const char *activity, uint8_t percent, const char *hint);
+  void vegaConfigMessage(const char *title, const char *heading, const char *message);
+  void vegaConfigConfirm(const char *title, const char *question, const char *detail, const char *actionLabel,
+                         const char *backLabel = "Cancel (B)");
+
   void refresh() { surface.present(); }
 
   static constexpr uint8_t kShiftIdx = 29;
@@ -140,6 +153,10 @@ class Window {
   void dataShowFlightStatisticsSide(FlightStatistics &stats, uint16_t index);
 
   void clearMainScreen();
+  void drawRightString(const char *buf, int16_t right, int16_t y);
+  void drawWrappedText(const char *text, int16_t top, int16_t lineHeight, uint8_t maxLines);
+  void fitText(char *text, size_t capacity, uint16_t maxWidth);
+  void drawFooter(const char *backLabel, const char *actionLabel, const char *hint);
 
   IDisplay &surface;
   Adafruit_GFX &display;

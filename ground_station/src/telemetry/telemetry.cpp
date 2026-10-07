@@ -6,6 +6,7 @@
 #include "config.hpp"
 #include "console.hpp"
 #include "crc.hpp"
+#include "remote/remote_config_protocol.hpp"
 
 #include <algorithm>
 
@@ -215,7 +216,10 @@ void Telemetry::update(void* pvParameter) {
     if (ref->requestExitTesting) {
       ref->requestExitTesting = false;
       vTaskDelay(1000);
-      ref->setMode(UNIDIRECTIONAL);
+      // A remote configuration session (e.g. reboot after testing) keeps the link bidirectional.
+      if (!ref->remoteActive) {
+        ref->setMode(UNIDIRECTIONAL);
+      }
       ref->testingActive = false;
     }
 
@@ -250,6 +254,43 @@ bool Telemetry::lockNormalWriter() {
   return true;
 }
 
+bool Telemetry::beginRemoteSession(const uint8_t* idleFrame) {
+  if (!lockNormalWriter()) {
+    return false;
+  }
+  remoteActive = true;
+  // Load a harmless payload before the receiver starts answering.
+  sendTXPayload(const_cast<uint8_t*>(idleFrame), remote_config::kFrameSize);
+  vTaskDelay(20);
+  setMode(BIDIRECTIONAL);
+  xSemaphoreGive(uartMutex);
+  return true;
+}
+
+bool Telemetry::sendRemoteFrame(const uint8_t* frame) {
+  if (!remoteActive || !lockNormalWriter()) {
+    return false;
+  }
+  sendTXPayload(const_cast<uint8_t*>(frame), remote_config::kFrameSize);
+  xSemaphoreGive(uartMutex);
+  return true;
+}
+
+bool Telemetry::endRemoteSession(const uint8_t* idleFrame) {
+  if (!lockNormalWriter()) {
+    return false;
+  }
+  // Never leave a request in the receiver; it would be repeated to the next Vega packet.
+  sendTXPayload(const_cast<uint8_t*>(idleFrame), remote_config::kFrameSize);
+  vTaskDelay(20);
+  if (!testingActive) {
+    setMode(UNIDIRECTIONAL);
+  }
+  remoteActive = false;
+  xSemaphoreGive(uartMutex);
+  return true;
+}
+
 void Telemetry::disable() {
   if (!lockNormalWriter()) {
     return;
@@ -277,7 +318,7 @@ bool Telemetry::safeForUpdateLocked() const {
   const bool recent = (xTaskGetTickCount() - data.getLastUpdateTime()) <= pdMS_TO_TICKS(2000);
   const bool airborne = packet.state > 2 && packet.state < 7;
   return initialized && startupGuardElapsed() && !quarantined && !testingActive && !requestExitTesting &&
-         !triggerAction && !(recent && (airborne || packet.testing_mode));
+         !triggerAction && !remoteActive && !(recent && (airborne || packet.testing_mode));
 }
 
 bool Telemetry::startupGuardElapsed() const { return millis() - startupStarted >= TELEMETRY_STARTUP_GUARD_MS; }

@@ -48,6 +48,8 @@ void cc_defaults(bool use_default_outputs, bool set_by_user);
 /** persistence functions - return true on success **/
 bool cc_load();
 bool cc_save();
+/** Writes the given configuration to flash without changing the running configuration. **/
+bool cc_save_config(const cats_config_t& config);
 bool cc_format_save();
 
 /** action map functions **/

@@ -45,6 +45,12 @@ void Hmi::begin() {
   } else {
     console.warning.println("[HMI] Could not start radio update worker");
   }
+  static VegaConfig::Session session(recorder, link1, link2);
+  if (session.begin()) {
+    vegaSession = &session;
+  } else {
+    console.warning.println("[HMI] Could not start Vega configuration worker");
+  }
 
   window.begin();
   initialized = true;
@@ -100,6 +106,10 @@ void Hmi::fsm() {
 
     case RADIO_UPDATE:
       radioUpdate();
+      break;
+
+    case VEGA_CONFIG:
+      vegaConfig();
       break;
 
     default:
@@ -365,9 +375,39 @@ void Hmi::testing() {
     return;
   }
 
-  if (backButton.wasPressed()) {
+  if (testingState == RESTART_TO_TESTING || testingState == RESTART_TO_FLIGHT || testingState == RESTART_RESULT) {
+    if (testingRestartStep()) {
+      return;
+    }
+  } else if (testingState == EXIT_PROMPT) {
+    const bool restart = okButton.wasPressed();
+    if (restart || backButton.wasPressed()) {
+      if (restart) {
+        testingRestart(false);
+      } else {
+        state = MENU;
+        testingState = DISCLAIMER;
+        window.initMenu(menuIndex);
+      }
+    }
+    return;
+  } else if (backButton.wasPressed()) {
+    if (vegaInTestingMode() && testingRestartAvailable()) {
+      // Disarm first: the receiver would otherwise keep repeating the armed frame while the prompt is shown.
+      if (testingState >= WAIT_FOR_START && testingState <= STARTED) {
+        link1.exitTesting();
+        link2.enable();
+      }
+      // The Vega stays in testing mode until it restarts; offer the restart now.
+      testingState = EXIT_PROMPT;
+      window.vegaConfigConfirm("Testing Mode", "Leave testing mode?",
+                               "Restart the Vega in flight mode now. Otherwise it stays in testing mode until "
+                               "its next restart.",
+                               "Restart (A)", "Leave as is (B)");
+      return;
+    }
     state = MENU;
-    if (testingState >= WAIT_FOR_START) {
+    if (testingState >= WAIT_FOR_START && testingState <= STARTED) {
       link1.exitTesting();
       link2.enable();
     }
@@ -384,9 +424,11 @@ void Hmi::testing() {
           connected = true;
         }
 
-        window.initTestingConfirmed(connected, link1.data.testingMode());
+        const bool testingEnabled = link1.data.testingMode();
+        window.initTestingConfirmed(connected, testingEnabled,
+                                    connected && !testingEnabled && testingRestartAvailable());
         if (connected) {
-          testingState = CAN_START;
+          testingState = testingEnabled ? CAN_START : CAN_NOT_START;
         } else {
           testingState = CAN_NOT_START;
         }
@@ -432,6 +474,12 @@ void Hmi::testing() {
     } break;
 
     case CAN_NOT_START:
+      if (okButton.wasPressed() && (link1.data.getLastUpdateTime() + 2000) > xTaskGetTickCount() &&
+          !link1.data.testingMode() && testingRestartAvailable()) {
+        testingRestart(true);
+      }
+      break;
+
     case FAILED:
       break;
 
@@ -474,6 +522,88 @@ void Hmi::testing() {
     default:
       break;
   }
+}
+
+bool Hmi::testingRestartAvailable() const {
+  return vegaSession != nullptr && vegaSession->idle() && systemConfig.config.testingPhrase[0] != '\0';
+}
+
+bool Hmi::vegaInTestingMode() const {
+  // snapshot() instead of testingMode(): testingMode() clears the update flag used by other screens.
+  auto &data = link1.data;
+  return (data.getLastUpdateTime() + 2000) > xTaskGetTickCount() && data.snapshot().testing_mode;
+}
+
+void Hmi::testingRestart(bool toTesting) {
+  testingState = toTesting ? RESTART_TO_TESTING : RESTART_TO_FLIGHT;
+  testingRestartStarted = millis();
+  testingRestartRevision = UINT32_MAX;
+  if (!vegaSession->quickReboot(1,
+                                toTesting ? remote_config::RebootMode::kTesting : remote_config::RebootMode::kNormal)) {
+    window.vegaConfigMessage("Testing Mode", "Restart not possible", "The Vega configuration is busy. Try again.");
+    testingState = RESTART_RESULT;
+    return;
+  }
+  window.vegaConfigProgress("Testing Mode", "Connecting to Vega", 0, "Back (B) cancels");
+}
+
+// Returns true when the testing screen must not process any other input.
+bool Hmi::testingRestartStep() {
+  if (testingState == RESTART_RESULT) {
+    if (okButton.wasPressed() || backButton.wasPressed()) {
+      state = MENU;
+      testingState = DISCLAIMER;
+      window.initMenu(menuIndex);
+    }
+    return true;
+  }
+  const VegaConfig::Snapshot snapshot = vegaSession->snapshot();
+  if (snapshot.phase == VegaConfig::Phase::kBusy) {
+    if (backButton.wasPressed()) {
+      vegaSession->cancel();
+    }
+    if (snapshot.revision != testingRestartRevision) {
+      testingRestartRevision = snapshot.revision;
+      window.vegaConfigProgress("Testing Mode", snapshot.activity, snapshot.percent, "Back (B) cancels");
+    }
+    return true;
+  }
+  if (snapshot.phase == VegaConfig::Phase::kResult) {
+    vegaSession->acknowledge();
+    if (!snapshot.success) {
+      window.vegaConfigMessage("Testing Mode", snapshot.title, snapshot.message);
+      testingState = RESTART_RESULT;
+      return true;
+    }
+    if (testingState == RESTART_TO_FLIGHT) {
+      window.vegaConfigMessage("Testing Mode", "Vega restarting", "The Vega restarts in flight mode.");
+      testingState = RESTART_RESULT;
+      return true;
+    }
+    testingRestartStarted = millis();
+    window.vegaConfigProgress("Testing Mode", "Waiting for Vega", 100, "Back (B) leaves this screen");
+    return true;
+  }
+  // Restart acknowledged: wait until the Vega reports testing mode.
+  if (testingState == RESTART_TO_TESTING) {
+    if (backButton.wasPressed()) {
+      state = MENU;
+      testingState = DISCLAIMER;
+      window.initMenu(menuIndex);
+      return true;
+    }
+    if (vegaInTestingMode()) {
+      window.initTestingConfirmed(true, true);
+      testingState = CAN_START;
+      return true;
+    }
+    if (millis() - testingRestartStarted > 40000U) {
+      window.vegaConfigMessage("Testing Mode", "No testing mode",
+                               "The Vega did not report testing mode after the restart.");
+      testingState = RESTART_RESULT;
+    }
+  }
+  return true;
 }
 
 /* DATA */
@@ -912,6 +1042,9 @@ void Hmi::settings() {
               case BUTTON_ACTION_SELF_TEST:
                 initSelfTest();
                 return;
+              case BUTTON_ACTION_VEGA_CONFIG:
+                initVegaConfig();
+                return;
               case BUTTON_ACTION_VERSION:
                 break;
               case BUTTON_ACTION_NONE:
@@ -1214,7 +1347,7 @@ void Hmi::radioUpdate() {
 }
 
 void Hmi::updateAutomaticUsbStorage(const RecorderStatus &recorderStatus) {
-  if (state == SELF_TEST || state == RADIO_UPDATE) {
+  if (state == SELF_TEST || state == RADIO_UPDATE || state == VEGA_CONFIG) {
     return;
   }
   const bool connected = Utils::isConnected();

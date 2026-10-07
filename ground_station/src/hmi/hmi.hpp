@@ -8,6 +8,7 @@
 #include "clock.hpp"
 #include "config.hpp"
 #include "logging/recorder.hpp"
+#include "remote/vega_config_session.hpp"
 #include "update/radio_firmware_updater.hpp"
 #include "window.hpp"
 
@@ -55,6 +56,7 @@ class Hmi {
     SELF_TEST = 8,
     FIRMWARE_UPDATE = 9,
     RADIO_UPDATE = 10,
+    VEGA_CONFIG = 11,
   };
 
   enum TestingState {
@@ -64,6 +66,10 @@ class Hmi {
     WAIT_FOR_START = 3,
     FAILED = 4,
     STARTED = 5,
+    RESTART_TO_TESTING = 6,  // Ground Station asked the Vega to restart in testing mode
+    EXIT_PROMPT = 7,         // Leaving: offer a restart back to flight mode
+    RESTART_TO_FLIGHT = 8,
+    RESTART_RESULT = 9,
   };
 
   enum CalibrationState {
@@ -88,6 +94,7 @@ class Hmi {
 
   Recorder recorder;
   RadioUpdate::RadioFirmwareUpdater* radioUpdater{nullptr};
+  VegaConfig::Session* vegaSession{nullptr};
 
   uint16_t oldTimeStamp = 0;
 
@@ -109,6 +116,12 @@ class Hmi {
   bool showRecoveryLocation(int8_t linkIndex);
   void initTesting();
   void testing();
+  bool testingRestartAvailable() const;
+  void testingRestart(bool toTesting);
+  bool testingRestartStep();
+  bool vegaInTestingMode() const;
+  uint32_t testingRestartStarted{0};
+  uint32_t testingRestartRevision{UINT32_MAX};
   void initData();
   void drawDataList();
   void openSelectedLog();
@@ -128,6 +141,35 @@ class Hmi {
   void firmwareUpdate();
   void initRadioUpdate();
   void radioUpdate();
+  void initVegaConfig();
+  void vegaConfig();
+  void leaveVegaConfig();
+  void drawVegaConfig(const VegaConfig::Snapshot& snapshot);
+  void drawVegaMenu(const VegaConfig::Snapshot& snapshot);
+  void drawVegaEdit();
+  void drawVegaFiles(const VegaConfig::Snapshot& snapshot);
+  void drawVegaReview(const VegaConfig::Snapshot& snapshot);
+  void moveVegaSelection(int direction, size_t count);
+  enum class VegaView : uint8_t {
+    LinkSelect,
+    Menu,
+    Edit,
+    Files,
+    Review,
+    ConfirmWrite,
+    ConfirmTesting,
+    ConfirmRestart,
+    ConfirmClose
+  };
+  VegaView vegaView{VegaView::LinkSelect};
+  size_t vegaSelection{0};
+  size_t vegaWindowStart{0};
+  size_t vegaMenuSelection{0};
+  uint32_t vegaRevision{UINT32_MAX};
+  bool vegaRedraw{true};
+  bool vegaLeaving{false};
+  uint32_t vegaHoldStarted{0};
+  uint32_t vegaLastDraw{0};
   void drawRadioUpdateList(const RadioUpdate::Snapshot& snapshot);
   void updateAutomaticUsbStorage(const RecorderStatus& recorderStatus);
   bool claimStorageForFirmware();

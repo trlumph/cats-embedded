@@ -9,6 +9,7 @@
 #include "telemetryData.hpp"
 #include "telemetry_reg.hpp"
 
+#include <atomic>
 #include <cstdint>
 #include <ctime>
 #include <functional>
@@ -40,6 +41,7 @@ class Parser {
     sink = packetSink;
     source = packetSource;
   }
+  void setRemoteSink(IRemoteConfigSink* sinkForRemote) { remoteSink.store(sinkForRemote); }
 
   void reset() {
     dataIndex = 0;
@@ -66,6 +68,7 @@ class Parser {
   TelemetryLocation* location{nullptr};
   TelemetryTime* time{nullptr};
   ITelemetryPacketSink* sink{nullptr};
+  std::atomic<IRemoteConfigSink*> remoteSink{nullptr};
   uint8_t source{0};
   mutable portMUX_TYPE diagnosticsMux = portMUX_INITIALIZER_UNLOCKED;
   SelfTestLinkObservation observation{};

@@ -41,4 +41,7 @@ volatile recorder_status_e global_recorder_status = REC_OFF;
 event_action_map_elem_t* event_action_map = nullptr;
 
 char telemetry_code_version[20] = {};
+
+bool global_configured_testing_mode = false;
+uint8_t global_boot_token = 1;
 // NOLINTEND(cppcoreguidelines-avoid-non-const-global-variables)

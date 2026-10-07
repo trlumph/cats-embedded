@@ -80,4 +80,12 @@ const device_settings_t settingsTable[][4] = {
          {.buttonAction = BUTTON_ACTION_UPDATE_FIRMWARE},
          nullptr},
     },
+    {
+        {"Vega Configuration",
+         "Read, edit and save Vega settings by radio",
+         "Needs the same Test Phrase on Vega and GS",
+         BUTTON,
+         {.buttonAction = BUTTON_ACTION_VEGA_CONFIG},
+         nullptr},
+    },
 };

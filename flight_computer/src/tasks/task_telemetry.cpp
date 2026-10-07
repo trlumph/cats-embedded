@@ -7,10 +7,13 @@
 #include <cstring>
 
 #include "comm/fifo.hpp"
+#include "comm/remote_config.hpp"
 #include "comm/stream.hpp"
 #include "config/cats_config.hpp"
 #include "config/globals.hpp"
 #include "drivers/adc.hpp"
+#include "main.hpp"
+#include "target.hpp"
 #include "tasks/task_peripherals.hpp"
 #include "util/battery.hpp"
 #include "util/crc.hpp"
@@ -46,6 +49,7 @@ static constexpr uint32_t kDefaultPaGain = 34;
 void Telemetry::PackTxMessage(uint32_t ts, gnss_data_t* gnss, packed_tx_msg_t* tx_payload,
                               estimation_output_t estimation_data) const noexcept {
   static_assert(sizeof(packed_tx_msg_t) == 15);
+  static_assert(sizeof(packed_tx_msg_t) == remote_config::kFrameSize);
   if (m_fsm_enum > INVALID) {
     tx_payload->state = m_fsm_enum;
   }
@@ -106,6 +110,11 @@ void Telemetry::ParseRxMessage(packed_rx_msg_t* rx_payload) noexcept {
     return;
   }
 
+  /* Testing frames are only accepted when the Vega was started in testing mode with a test phrase. */
+  if (!m_testing_enabled || global_cats_config.telemetry_settings.test_phrase[0] == '\0') {
+    return;
+  }
+
   /* Check if the test phrase matches */
   if (rx_payload->passcode != m_test_phrase_crc) {
     return;
@@ -152,6 +161,10 @@ void Telemetry::ParseRxMessage(packed_rx_msg_t* rx_payload) noexcept {
     const char* test_phrase = global_cats_config.telemetry_settings.test_phrase;
     // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
     m_test_phrase_crc = crc32(reinterpret_cast<const uint8_t*>(test_phrase), strlen(test_phrase));
+    /* The Ground Station remote configuration uses the same phrase as testing mode. The token
+     * combines the boot counter (lost on power loss) with ADC noise so it differs across power cycles. */
+    const uint32_t noise = adc_get(ADC_BATTERY) ^ (adc_get(ADC_PYRO1) << 3U) ^ (adc_get(ADC_PYRO2) << 5U);
+    m_remote.Configure(m_test_phrase_crc, static_cast<uint8_t>(global_boot_token ^ (noise & 0xFFU) ^ (noise >> 8U)));
   }
 
   /* Configure the telemetry MCU */
@@ -211,10 +224,16 @@ void Telemetry::ParseRxMessage(packed_rx_msg_t* rx_payload) noexcept {
       }
     }
 
-    PackTxMessage(tick_count, &gnss_data, &tx_payload, estimation_output);
+    /* While a Ground Station configuration session is open, most packets carry configuration frames. */
+    uint8_t remote_frame[remote_config::kFrameSize]{};
+    if (m_remote.NextDownlink(remote_frame)) {
+      SendTxPayload(remote_frame, sizeof(remote_frame));
+    } else {
+      PackTxMessage(tick_count, &gnss_data, &tx_payload, estimation_output);
 
-    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
-    SendTxPayload(reinterpret_cast<uint8_t*>(&tx_payload), sizeof(packed_tx_msg_t));
+      // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+      SendTxPayload(reinterpret_cast<uint8_t*>(&tx_payload), sizeof(packed_tx_msg_t));
+    }
 
     if ((tick_count - uart_timeout) > 60000) {
       uart_timeout = tick_count;
@@ -333,9 +352,12 @@ bool Telemetry::Parse(uint8_t op_code, const uint8_t* buffer, uint32_t length, g
   bool gnss_position_received = false;
 
   if (op_code == CMD_RX) {
-    packed_rx_msg_t rx_payload{};
-    memcpy(&rx_payload, buffer, length);
-    ParseRxMessage(&rx_payload);
+    if (!m_remote.OnUplink(buffer, length)) {
+      packed_rx_msg_t rx_payload{};
+      /* The radio forwards 16 bytes; the testing message occupies 15. */
+      memcpy(&rx_payload, buffer, length < sizeof(rx_payload) ? length : sizeof(rx_payload));
+      ParseRxMessage(&rx_payload);
+    }
     // log_info("RX received");
   } else if (op_code == CMD_INFO) {
     // log_info("Link Info received");
@@ -429,6 +451,43 @@ void Telemetry::SendTxPayload(uint8_t* payload, uint32_t length) noexcept {
   memcpy(&out[2], payload, length);
   out[length + 2] = crc8(out, length + 2);
   HAL_UART_Transmit(&TELEMETRY_UART_HANDLE, out, length + 3, 2);
+}
+
+/* remote_config::ServerEnvironment */
+
+uint32_t Telemetry::NowMs() { return osKernelGetTickCount() * (1000U / sysGetTickFreq()); }
+
+uint8_t Telemetry::FlightState() { return static_cast<uint8_t>(m_fsm_enum); }
+
+bool Telemetry::TestingMode() { return m_testing_enabled; }
+
+bool Telemetry::RecorderWriting() { return global_recorder_status == REC_WRITE_TO_FLASH; }
+
+void Telemetry::CopyStoredConfig(cats_config_t* out) {
+  *out = global_cats_config;
+  /* Testing mode can be forced at boot (test button or Ground Station request) without being stored. */
+  out->enable_testing_mode = global_configured_testing_mode;
+}
+
+bool Telemetry::SaveConfig(const cats_config_t& config) { return cc_save_config(config); }
+
+void Telemetry::Reboot(remote_config::RebootMode mode) {
+  HAL_GPIO_WritePin(PYRO_EN_GPIO_Port, PYRO_EN_Pin, GPIO_PIN_RESET);
+  if (mode == remote_config::RebootMode::kTesting) {
+    HAL_RTCEx_BKUPWrite(&RTC_HANDLE, RTC_BKP_DR1, TESTING_BOOT_MAGIC_PATTERN);
+  }
+  /* Give the radio MCU time to finish the current transmission. */
+  osDelay(20);
+  __disable_irq();
+  NVIC_SystemReset();
+}
+
+const char* Telemetry::BoardName() { return board_name; }
+
+const char* Telemetry::FirmwareVersion() { return code_version; }
+
+const char* Telemetry::TelemetryVersion() {
+  return telemetry_code_version[0] != '\0' ? telemetry_code_version : "unknown";
 }
 
 extern "C" void HAL_UART_RxCpltCallback(UART_HandleTypeDef* huart) {

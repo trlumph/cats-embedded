@@ -4,13 +4,14 @@
 
 #pragma once
 
+#include "comm/remote_config.hpp"
 #include "task.hpp"
 #include "task_buzzer.hpp"
 #include "task_state_est.hpp"
 
 namespace task {
 
-class Telemetry final : public Task<Telemetry, 1024> {
+class Telemetry final : public Task<Telemetry, 1024>, private remote_config::ServerEnvironment {
  public:
   explicit Telemetry(const StateEstimation* task_state_estimation, const Buzzer& task_buzzer)
       : m_testing_enabled{global_cats_config.enable_testing_mode},
@@ -19,6 +20,21 @@ class Telemetry final : public Task<Telemetry, 1024> {
 
  private:
   [[noreturn]] void Run() noexcept override;
+
+  /* remote_config::ServerEnvironment */
+  uint32_t NowMs() override;
+  uint8_t FlightState() override;
+  bool TestingMode() override;
+  bool RecorderWriting() override;
+  void CopyStoredConfig(cats_config_t* out) override;
+  bool SaveConfig(const cats_config_t& config) override;
+  void Reboot(remote_config::RebootMode mode) override;
+  const char* BoardName() override;
+  const char* FirmwareVersion() override;
+  const char* TelemetryVersion() override;
+
+  /* Ground Station remote configuration; only accessed from the telemetry task. */
+  remote_config::Server m_remote{*this};
 
   struct packed_tx_msg_t {
     uint8_t state : 3;

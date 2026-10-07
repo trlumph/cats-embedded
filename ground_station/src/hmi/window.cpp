@@ -1019,7 +1019,7 @@ void Window::initTesting() {
   surface.present();
 }
 
-void Window::initTestingConfirmed(bool connected, bool testingEnabled) {
+void Window::initTestingConfirmed(bool connected, bool testingEnabled, bool canRestartInTesting) {
   clearMainScreen();
   display.setTextSize(1);
   if (connected) {
@@ -1040,14 +1040,27 @@ void Window::initTestingConfirmed(bool connected, bool testingEnabled) {
       display.setFont(&FreeSansBold9pt7b);
       drawCentreString("Not in Testing Mode.", 200, 100);
       display.setFont(&FreeSans9pt7b);
-      display.setCursor(6, 130);
-      display.print("Connect the flight computer to the Configurator,");
-      display.setCursor(6, 150);
-      display.print("enable 'Testing Mode' and set 'Testing Phrase'.");
+      if (canRestartInTesting) {
+        display.setCursor(6, 130);
+        display.print("The Vega can restart in testing mode for one");
+        display.setCursor(6, 150);
+        display.print("boot. Both Test Phrases must match. The next");
+        display.setCursor(6, 170);
+        display.print("restart or power cycle returns to flight mode.");
+      } else {
+        display.setCursor(6, 130);
+        display.print("Connect the flight computer to the Configurator,");
+        display.setCursor(6, 150);
+        display.print("enable 'Testing Mode' and set 'Testing Phrase'.");
+      }
 
       display.setFont(&FreeSans9pt7b);
       display.setCursor(6, 225);
       display.print("Cancel (B)");
+      if (canRestartInTesting) {
+        display.setCursor(270, 225);
+        display.print("Restart (A)");
+      }
     }
   } else {
     display.setFont(&FreeSansBold9pt7b);
@@ -2224,4 +2237,184 @@ void Window::dataShowFlightStatisticsSide(FlightStatistics &stats, uint16_t inde
   } else {
     display.print("--");
   }
+}
+
+namespace {
+// Vega remote configuration screens
+constexpr int16_t kListTop = 52;
+constexpr int16_t kRowHeight = 20;
+constexpr int16_t kFooterBaseline = 230;
+constexpr int16_t kRightEdge = 378;
+}  // namespace
+
+void Window::drawRightString(const char *buf, int16_t right, int16_t y) {
+  int16_t x1 = 0;
+  int16_t y1 = 0;
+  uint16_t w = 0;
+  uint16_t h = 0;
+  display.getTextBounds(buf, 0, y, &x1, &y1, &w, &h);
+  display.setCursor(static_cast<int16_t>(right - static_cast<int16_t>(w)), y);
+  display.print(buf);
+}
+
+void Window::fitText(char *text, size_t capacity, uint16_t maxWidth) {
+  int16_t x1 = 0;
+  int16_t y1 = 0;
+  uint16_t w = 0;
+  uint16_t h = 0;
+  size_t length = strlen(text);
+  display.getTextBounds(text, 0, 100, &x1, &y1, &w, &h);
+  if (w <= maxWidth) {
+    return;
+  }
+  // Shorten until "text..." fits.
+  while (length > 0) {
+    --length;
+    text[length] = '\0';
+    char candidate[96]{};
+    snprintf(candidate, sizeof(candidate), "%s...", text);
+    display.getTextBounds(candidate, 0, 100, &x1, &y1, &w, &h);
+    if (w <= maxWidth && length + 4 <= capacity) {
+      snprintf(text, capacity, "%s", candidate);
+      return;
+    }
+  }
+}
+
+void Window::drawWrappedText(const char *text, int16_t top, int16_t lineHeight, uint8_t maxLines) {
+  // Greedy word wrap to the 380 px content width.
+  constexpr uint16_t kWidth = 380;
+  char line[96]{};
+  const char *cursor = text;
+  int16_t y = top;
+  for (uint8_t count = 0; count < maxLines && *cursor != '\0'; ++count) {
+    size_t lineLength = 0;
+    size_t lastBreak = 0;
+    while (cursor[lineLength] != '\0' && lineLength < sizeof(line) - 1) {
+      line[lineLength] = cursor[lineLength];
+      line[lineLength + 1] = '\0';
+      int16_t x1 = 0;
+      int16_t y1 = 0;
+      uint16_t w = 0;
+      uint16_t h = 0;
+      display.getTextBounds(line, 0, 100, &x1, &y1, &w, &h);
+      if (w > kWidth) {
+        break;
+      }
+      if (cursor[lineLength] == ' ') {
+        lastBreak = lineLength;
+      }
+      ++lineLength;
+    }
+    size_t take = lineLength;
+    if (cursor[lineLength] != '\0' && lastBreak > 0) {
+      take = lastBreak;
+    }
+    memcpy(line, cursor, take);
+    line[take] = '\0';
+    drawCentreString(line, 200, y);
+    cursor += take;
+    while (*cursor == ' ') {
+      ++cursor;
+    }
+    y = static_cast<int16_t>(y + lineHeight);
+  }
+}
+
+void Window::drawFooter(const char *backLabel, const char *actionLabel, const char *hint) {
+  display.setFont(&FreeSans9pt7b);
+  display.setTextColor(BLACK);
+  if (backLabel != nullptr) {
+    display.setCursor(10, kFooterBaseline);
+    display.print(backLabel);
+  }
+  if (hint != nullptr && hint[0] != '\0') {
+    drawCentreString(hint, 200, kFooterBaseline);
+  }
+  if (actionLabel != nullptr && actionLabel[0] != '\0') {
+    drawRightString(actionLabel, 390, kFooterBaseline);
+  }
+}
+
+void Window::vegaConfigList(const char *title, const ListRow *rows, size_t count, size_t selected, bool hasPrevious,
+                            bool hasNext, const char *actionLabel, const char *hint) {
+  clearMainScreen();
+  drawPageHeader(title, false, false);
+  display.setFont(&FreeSans9pt7b);
+  display.setTextSize(1);
+  for (size_t row = 0; row < count && row < kListRows; ++row) {
+    const auto y = static_cast<int16_t>(kListTop + kRowHeight * static_cast<int16_t>(row));
+    const bool highlighted = row == selected;
+    display.fillRect(0, y, 380, kRowHeight, highlighted ? BLACK : WHITE);
+    display.setTextColor(highlighted ? WHITE : BLACK);
+
+    char right[48]{};
+    uint16_t rightWidth = 0;
+    if (rows[row].right != nullptr && rows[row].right[0] != '\0') {
+      snprintf(right, sizeof(right), "%s", rows[row].right);
+      fitText(right, sizeof(right), 170);
+      int16_t x1 = 0;
+      int16_t y1 = 0;
+      uint16_t h = 0;
+      display.getTextBounds(right, 0, 100, &x1, &y1, &rightWidth, &h);
+      drawRightString(right, kRightEdge - 4, static_cast<int16_t>(y + 15));
+    }
+    char left[64]{};
+    snprintf(left, sizeof(left), "%s", rows[row].left != nullptr ? rows[row].left : "");
+    fitText(left, sizeof(left), static_cast<uint16_t>(kRightEdge - 4 - 10 - (rightWidth > 0 ? rightWidth + 12 : 0)));
+    display.setCursor(10, static_cast<int16_t>(y + 15));
+    display.print(left);
+  }
+  display.setTextColor(BLACK);
+  if (hasPrevious) {
+    display.fillTriangle(389, 54, 383, 62, 395, 62, BLACK);
+  }
+  if (hasNext) {
+    display.fillTriangle(389, 210, 383, 202, 395, 202, BLACK);
+  }
+  drawFooter("Back (B)", actionLabel, hint);
+  surface.present();
+}
+
+void Window::vegaConfigProgress(const char *title, const char *activity, uint8_t percent, const char *hint) {
+  clearMainScreen();
+  drawPageHeader(title, false, false);
+  display.setTextColor(BLACK);
+  display.setFont(&FreeSansBold12pt7b);
+  drawCentreString(activity, 200, 105);
+  display.drawRect(38, 132, 324, 26, BLACK);
+  display.fillRect(42, 136, static_cast<int16_t>(316U * (percent > 100 ? 100U : percent) / 100U), 18, BLACK);
+  display.setFont(&FreeSans9pt7b);
+  char label[8]{};
+  snprintf(label, sizeof(label), "%u%%", percent);
+  drawCentreString(label, 200, 184);
+  if (hint != nullptr) {
+    drawCentreString(hint, 200, 224);
+  }
+  surface.present();
+}
+
+void Window::vegaConfigMessage(const char *title, const char *heading, const char *message) {
+  clearMainScreen();
+  drawPageHeader(title, false, false);
+  display.setTextColor(BLACK);
+  display.setFont(&FreeSansBold12pt7b);
+  drawCentreString(heading, 200, 95);
+  display.setFont(&FreeSans9pt7b);
+  drawWrappedText(message, 128, 20, 4);
+  drawFooter("Back (B)", nullptr, nullptr);
+  surface.present();
+}
+
+void Window::vegaConfigConfirm(const char *title, const char *question, const char *detail, const char *actionLabel,
+                               const char *backLabel) {
+  clearMainScreen();
+  drawPageHeader(title, false, false);
+  display.setTextColor(BLACK);
+  display.setFont(&FreeSansBold12pt7b);
+  drawCentreString(question, 200, 100);
+  display.setFont(&FreeSans9pt7b);
+  drawWrappedText(detail, 132, 20, 4);
+  drawFooter(backLabel, actionLabel, nullptr);
+  surface.present();
 }

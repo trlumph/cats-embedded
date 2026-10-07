@@ -108,13 +108,17 @@ bool cc_format_save() {
   return cc_save();
 }
 
-bool cc_save() {
-  lfs_file_open(&lfs, &config_file, "config", LFS_O_WRONLY | LFS_O_CREAT);
+bool cc_save() { return cc_save_config(global_cats_config); }
+
+bool cc_save_config(const cats_config_t& config) {
+  if (lfs_file_open(&lfs, &config_file, "config", LFS_O_WRONLY | LFS_O_CREAT) < 0) {
+    log_error("Error while opening configuration file!");
+    return false;
+  }
   lfs_file_rewind(&lfs, &config_file);
-  /* Config saving is successful if the entire global_cats_config struct is written. */
-  const bool ret =
-      lfs_file_write(&lfs, &config_file, &global_cats_config, sizeof(global_cats_config)) == sizeof(global_cats_config);
-  lfs_file_close(&lfs, &config_file);
+  /* Config saving is successful if the entire config struct is written. */
+  bool ret = lfs_file_write(&lfs, &config_file, &config, sizeof(config)) == sizeof(config);
+  ret &= lfs_file_close(&lfs, &config_file) >= 0;
   if (!ret) {
     log_error("Error while saving configuration file!");
   }

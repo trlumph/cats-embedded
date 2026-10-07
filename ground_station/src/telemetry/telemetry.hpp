@@ -17,6 +17,13 @@ class Telemetry {
   void begin();
 
   void setPacketSink(ITelemetryPacketSink* sink, uint8_t source) { parser.setPacketSink(sink, source); }
+  void setRemoteSink(IRemoteConfigSink* sink) { parser.setRemoteSink(sink); }
+  // Vega remote configuration: the receiver answers every Vega packet with the
+  // last payload written by sendRemoteFrame() while the session is open.
+  bool beginRemoteSession(const uint8_t* idleFrame);
+  bool sendRemoteFrame(const uint8_t* frame);
+  bool endRemoteSession(const uint8_t* idleFrame);
+  [[nodiscard]] bool remoteSessionActive() const { return remoteActive.load(); }
 
   void setLinkPhrase(const char* phrase, uint32_t length);
   void setLinkPhrase(const String& phrase);
@@ -75,6 +82,7 @@ class Telemetry {
   std::atomic<bool> updateGranted{false};
   std::atomic<bool> quarantined{false};
   bool testingActive{false};
+  std::atomic<bool> remoteActive{false};
   bool safeForUpdateLocked() const;
   bool lockNormalWriter();
   bool startupGuardElapsed() const;

@@ -227,6 +227,22 @@ test_rom_bootloader() {
   "$test_binary"
 }
 
+# Runs the Vega remote configuration server (flight_computer) against the Ground
+# Station client over a simulated radio link. Needs ArduinoJson from the dependencies step.
+test_remote_config() {
+  local test_binary="$build_dir/remote-config-test"
+  local vega="$repo_root/flight_computer/src"
+  local arduinojson="${PLATFORMIO_LIBDEPS_DIR:-$project_root/.pio/libdeps}/ground_station/ArduinoJson/src"
+  mkdir -p "$build_dir"
+  g++ -std=c++20 -Wall -Wextra -Werror -Wno-sign-compare -Wno-missing-field-initializers \
+    -I"$project_root/tests/vega_host_stubs" -I"$vega" -I"$project_root/src" -I"$arduinojson" \
+    "$project_root/tests/remote_config_test.cpp" "$project_root/tests/vega_host_stubs/cli_stubs.cpp" \
+    "$vega/comm/remote_config.cpp" "$vega/cli/settings.cpp" "$vega/util/crc.cpp" \
+    "$project_root/src/remote/vega_config_client.cpp" "$project_root/src/remote/vega_profile.cpp" \
+    "$project_root/src/telemetry/crc.cpp" -o "$test_binary"
+  "$test_binary" "$vega/comm/remote_config_protocol.hpp" "$project_root/src/remote/remote_config_protocol.hpp"
+}
+
 test_self_test() {
   local test_binary="$build_dir/self-test"
   g++ -std=c++20 -Wall -Wextra -Werror -I"$project_root/src" \
@@ -243,6 +259,7 @@ test_attitude() {
 }
 
 timed dependencies prepare_dependencies
+timed remote-config-test test_remote_config
 timed rom-bootloader-test test_rom_bootloader
 timed self-test test_self_test
 timed attitude-test test_attitude

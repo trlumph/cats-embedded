@@ -59,6 +59,15 @@ int main() {
     BootLoaderJump();                                  // Does not return!
   }
 
+  /* One-shot testing mode request from the Ground Station; cleared so the next boot is a normal one */
+  const bool testing_boot_requested = HAL_RTCEx_BKUPRead(&RTC_HANDLE, RTC_BKP_DR1) == TESTING_BOOT_MAGIC_PATTERN;
+  HAL_RTCEx_BKUPWrite(&RTC_HANDLE, RTC_BKP_DR1, 0);
+
+  /* Boot counter used as Ground Station request token (never 0) */
+  const uint32_t boot_counter = HAL_RTCEx_BKUPRead(&RTC_HANDLE, RTC_BKP_DR2) + 1U;
+  HAL_RTCEx_BKUPWrite(&RTC_HANDLE, RTC_BKP_DR2, boot_counter);
+  global_boot_token = static_cast<uint8_t>((boot_counter % 255U) + 1U);
+
   usb_device_initialized = target_init();
 
   // Build digital io
@@ -107,9 +116,17 @@ int main() {
   servo1.SetPosition(global_cats_config.initial_servo_position[0]);
   servo2.SetPosition(global_cats_config.initial_servo_position[1]);
 
+  global_configured_testing_mode = global_cats_config.enable_testing_mode;
+
   // Check if the test button is pressed during boot up and if so enter test mode
   if (!test_button.GetState() && strlen(global_cats_config.telemetry_settings.test_phrase) > 0) {
     log_info("Entering test mode...");
+    global_cats_config.enable_testing_mode = true;
+  }
+
+  // The Ground Station requested a single boot into testing mode
+  if (testing_boot_requested && strlen(global_cats_config.telemetry_settings.test_phrase) > 0) {
+    log_info("Entering test mode (Ground Station request)...");
     global_cats_config.enable_testing_mode = true;
   }
 
