@@ -3,7 +3,7 @@
 The Ground Station can read, edit and write the configuration of a CATS Vega over the radio link, exchange
 configuration profiles with the CATS Configurator, and restart the Vega into testing mode for one boot.
 
-Both firmwares must contain this feature: Ground Station `1.3.1+gscfg.2` and Vega `3.0.2+gscfg.1` or newer.
+Both firmwares must contain this feature: Ground Station `1.3.1+gscfg.3` and Vega `3.0.2+gscfg.1` or newer.
 The telemetry (radio) firmware is not changed; receivers and Vega radios on 1.1.3 or 1.2.0 both work.
 
 ## Requirements
@@ -22,7 +22,12 @@ The telemetry (radio) firmware is not changed; receivers and Vega radios on 1.1.
    (about 10-15 s). During a session one in ten packets is still normal telemetry, so the Vega state stays visible.
 2. Menu:
    - **Edit Settings** - numbers (Left/Right, hold to repeat and accelerate), ON/OFF values and timer events.
-     Event action lists and phrases are shown but are edited with the Configurator or a profile.
+     Phrases are shown but are edited with the Configurator.
+   - **Event actions** - on an *... Actions* row, **Actions (A)** lists the actions of that event in order
+     (for example `Pyro 1 ON`, `Delay 1000 ms`, `Servo 2 160`, `Recorder ON`). Servo positions (0-1000) can be changed
+     with Left/Right (1 per press, hold to accelerate). Adding, removing or reordering actions and changing other
+     actions is done with the Configurator or a profile. A single changed servo is shown in the review as
+     `Servo 2 160 > 300`.
    - **Review & Write Changes** - lists every change (`old > new`). *Write* saves the settings on the Vega, the Vega
      restarts, and the Ground Station reads the configuration again and verifies every written value.
    - **Discard Changes**

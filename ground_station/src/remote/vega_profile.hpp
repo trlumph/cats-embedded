@@ -57,6 +57,27 @@ bool canonicalize(const KeyInfo& info, const char* value, char* out, size_t capa
 /// Short human readable form for the 400 px display.
 void displayValue(const KeyInfo& info, const char* canonical, char* out, size_t capacity);
 
+/// One entry of an event action list (Vega action_function_e and its argument).
+struct ActionItem {
+  int16_t action{0};
+  int16_t argument{0};
+};
+inline constexpr size_t kActionSlots = kActionCount / 2;
+inline constexpr int16_t kServoMin = 0;
+inline constexpr int16_t kServoMax = 1000;
+
+/// Decodes an action list up to the first NONE action. Returns the number of actions.
+size_t decodeActions(const char* canonical, ActionItem* items, size_t capacity);
+/// Display name of a Vega action ("Pyro 1", "Servo 2", "Delay", ...).
+const char* actionName(int16_t action);
+/// Display form of an action argument ("ON", "1000 ms", "160", ...).
+void actionArgument(const ActionItem& item, char* out, size_t capacity);
+/// Servo actions are the only actions whose argument can be edited on the Ground Station.
+bool isServoAction(int16_t action);
+/// Short review text for a changed action list: one changed servo shows "Servo 1 160" > "300".
+void describeActionChange(const char* from, const char* to, char* outFrom, size_t fromCapacity, char* outTo,
+                          size_t toCapacity);
+
 struct Identity {
   char board[kIdentitySize]{};
   char firmware[kIdentitySize]{};
@@ -95,6 +116,11 @@ class Model {
 
   /// Steps a value (numbers by step * multiplier, cycles lookups). Returns true if changed.
   bool adjust(size_t index, int direction, int32_t multiplier = 1);
+  /// Pending actions of an event entry; `before` is the Vega value of the same slot.
+  [[nodiscard]] size_t actionCount(size_t index) const;
+  bool action(size_t index, size_t slot, ActionItem& now, ActionItem& before) const;
+  /// Steps a servo position in an event action list. Returns true if changed.
+  bool adjustAction(size_t index, size_t slot, int direction, int32_t multiplier = 1);
   /// Sets a pending value from any accepted representation.
   bool setPending(size_t index, const char* value);
   void discard();

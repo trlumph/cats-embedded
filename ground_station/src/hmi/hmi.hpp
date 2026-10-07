@@ -147,6 +147,8 @@ class Hmi {
   void drawVegaConfig(const VegaConfig::Snapshot& snapshot);
   void drawVegaMenu(const VegaConfig::Snapshot& snapshot);
   void drawVegaEdit();
+  void drawVegaActions();
+  int vegaAdjustInput(int32_t* multiplier);
   void drawVegaFiles(const VegaConfig::Snapshot& snapshot);
   void drawVegaReview(const VegaConfig::Snapshot& snapshot);
   void moveVegaSelection(int direction, size_t count);
@@ -154,6 +156,7 @@ class Hmi {
     LinkSelect,
     Menu,
     Edit,
+    Actions,
     Files,
     Review,
     ConfirmWrite,
@@ -165,6 +168,9 @@ class Hmi {
   size_t vegaSelection{0};
   size_t vegaWindowStart{0};
   size_t vegaMenuSelection{0};
+  size_t vegaActionKey{0};
+  size_t vegaEditSelection{0};
+  size_t vegaEditWindowStart{0};
   uint32_t vegaRevision{UINT32_MAX};
   bool vegaRedraw{true};
   bool vegaLeaving{false};

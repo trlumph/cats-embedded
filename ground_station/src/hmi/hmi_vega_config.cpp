@@ -133,9 +133,60 @@ void Hmi::drawVegaEdit() {
   }
   VegaConfig::EntryView selected{};
   vegaSession->entry(vegaSelection, selected);
-  const char* hint = selected.editable ? "< > change" : "view only";
+  const char* hint = selected.editable ? "< > change" : (selected.actions ? nullptr : "view only");
   window.vegaConfigList("Edit Settings", rows, shown, vegaSelection - vegaWindowStart, vegaWindowStart > 0,
-                        vegaWindowStart + Window::kListRows < count, "", hint);
+                        vegaWindowStart + Window::kListRows < count, selected.actions ? "Actions (A)" : "", hint);
+}
+
+void Hmi::drawVegaActions() {
+  VegaConfig::EntryView entry{};
+  vegaSession->entry(vegaActionKey, entry);
+  const size_t count = vegaSession->actionCount(vegaActionKey);
+  if (count == 0) {
+    window.vegaConfigMessage(entry.label, "No actions",
+                             "This event has no actions. Actions are added with the "
+                             "CATS Configurator or a profile.");
+    return;
+  }
+  Window::ListRow rows[Window::kListRows]{};
+  VegaConfig::ActionRowView views[Window::kListRows]{};
+  char labels[Window::kListRows][32]{};
+  size_t shown = 0;
+  for (size_t slot = 0; slot < count && shown < Window::kListRows; ++slot, ++shown) {
+    vegaSession->actionRow(vegaActionKey, slot, views[shown]);
+    snprintf(labels[shown], sizeof(labels[shown]), "%s%u  %s", views[shown].changed ? "* " : "",
+             static_cast<unsigned>(slot + 1), views[shown].name);
+    rows[shown] = {labels[shown], views[shown].value};
+  }
+  const bool servo = vegaSelection < shown && views[vegaSelection].editable;
+  window.vegaConfigList(entry.label, rows, shown, vegaSelection, false, false, "",
+                        servo ? "< > servo position" : "view only");
+}
+
+int Hmi::vegaAdjustInput(int32_t* multiplier) {
+  int direction = 0;
+  Button* held = nullptr;
+  *multiplier = 1;
+  if (rightButton.wasPressed()) {
+    direction = +1;
+  } else if (leftButton.wasPressed()) {
+    direction = -1;
+  } else if (rightButton.pressedFor(500)) {
+    direction = +1;
+    held = &rightButton;
+  } else if (leftButton.pressedFor(500)) {
+    direction = -1;
+    held = &leftButton;
+  }
+  if (direction != 0 && held != nullptr) {
+    // Accelerate long holds; repeat at most every 100 ms.
+    if (millis() - vegaHoldStarted < 100U) {
+      return 0;
+    }
+    vegaHoldStarted = millis();
+    *multiplier = held->pressedFor(5000) ? 100 : (held->pressedFor(2000) ? 10 : 1);
+  }
+  return direction;
 }
 
 void Hmi::drawVegaFiles(const VegaConfig::Snapshot& snapshot) {
@@ -212,6 +263,9 @@ void Hmi::drawVegaConfig(const VegaConfig::Snapshot& snapshot) {
       switch (vegaView) {
         case VegaView::Edit:
           drawVegaEdit();
+          break;
+        case VegaView::Actions:
+          drawVegaActions();
           break;
         case VegaView::Review:
           drawVegaReview(snapshot);
@@ -433,33 +487,47 @@ void Hmi::vegaConfig() {
             moveVegaSelection(-1, count);
             vegaRedraw = true;
           }
-          int direction = 0;
-          Button* held = nullptr;
-          if (rightButton.wasPressed()) {
-            direction = +1;
-          } else if (leftButton.wasPressed()) {
-            direction = -1;
-          } else if (rightButton.pressedFor(500)) {
-            direction = +1;
-            held = &rightButton;
-          } else if (leftButton.pressedFor(500)) {
-            direction = -1;
-            held = &leftButton;
-          }
-          if (direction != 0) {
-            int32_t multiplier = 1;
-            if (held != nullptr) {
-              // Accelerate long holds; repeat at most every 100 ms.
-              if (millis() - vegaHoldStarted < 100U) {
-                direction = 0;
-              } else {
-                vegaHoldStarted = millis();
-                multiplier = held->pressedFor(5000) ? 100 : (held->pressedFor(2000) ? 10 : 1);
-              }
-            }
-            if (direction != 0 && vegaSession->adjust(vegaSelection, direction, multiplier)) {
+          if (okButton.wasPressed()) {
+            VegaConfig::EntryView selected{};
+            if (vegaSession->entry(vegaSelection, selected) && selected.actions) {
+              vegaActionKey = vegaSelection;
+              vegaEditSelection = vegaSelection;
+              vegaEditWindowStart = vegaWindowStart;
+              vegaSelection = 0;
+              vegaWindowStart = 0;
+              vegaView = VegaView::Actions;
               vegaRedraw = true;
+              return;
             }
+          }
+          int32_t multiplier = 1;
+          const int direction = vegaAdjustInput(&multiplier);
+          if (direction != 0 && vegaSession->adjust(vegaSelection, direction, multiplier)) {
+            vegaRedraw = true;
+          }
+        } break;
+
+        case VegaView::Actions: {
+          const size_t count = vegaSession->actionCount(vegaActionKey);
+          if (backButton.wasPressed()) {
+            vegaSelection = vegaEditSelection;
+            vegaWindowStart = vegaEditWindowStart;
+            vegaView = VegaView::Edit;
+            vegaRedraw = true;
+            return;
+          }
+          if (downButton.wasPressed()) {
+            moveVegaSelection(+1, count);
+            vegaRedraw = true;
+          }
+          if (upButton.wasPressed()) {
+            moveVegaSelection(-1, count);
+            vegaRedraw = true;
+          }
+          int32_t multiplier = 1;
+          const int direction = vegaAdjustInput(&multiplier);
+          if (direction != 0 && vegaSession->adjustAction(vegaActionKey, vegaSelection, direction, multiplier)) {
+            vegaRedraw = true;
           }
         } break;
 

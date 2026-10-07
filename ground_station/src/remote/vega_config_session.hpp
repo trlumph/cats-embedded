@@ -56,6 +56,14 @@ struct EntryView {
   bool known{false};
   bool changed{false};
   bool editable{false};
+  bool actions{false};  ///< Event action list; opens the action view.
+};
+
+struct ActionRowView {
+  char name[16]{};
+  char value[24]{};
+  bool changed{false};
+  bool editable{false};  ///< Servo position.
 };
 
 struct RowView {
@@ -93,6 +101,9 @@ class Session final : public IRemoteConfigSink {
   size_t entryCount() const;
   bool entry(size_t index, EntryView& view) const;
   bool adjust(size_t index, int direction, int32_t multiplier);
+  size_t actionCount(size_t index) const;
+  bool actionRow(size_t index, size_t slot, ActionRowView& view) const;
+  bool adjustAction(size_t index, size_t slot, int direction, int32_t multiplier);
   void discard();
   size_t rowCount() const;
   bool row(size_t index, RowView& view) const;

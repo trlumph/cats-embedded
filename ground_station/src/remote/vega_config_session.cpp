@@ -634,6 +634,7 @@ bool Session::entry(size_t index, EntryView& view) const {
   view.known = model.known(index);
   view.changed = model.changed(index);
   view.editable = model.editable(index);
+  view.actions = info.kind == Kind::kActions && view.known;
   displayValue(info, view.known ? model.pending(index) : "", view.value, sizeof(view.value));
   xSemaphoreGive(modelMutex);
   return true;
@@ -644,6 +645,45 @@ bool Session::adjust(size_t index, int direction, int32_t multiplier) {
     return false;
   }
   const bool changed = model.adjust(index, direction, multiplier);
+  const size_t pending = model.pendingCount();
+  xSemaphoreGive(modelMutex);
+  portENTER_CRITICAL(&stateMux);
+  state.pendingCount = pending;
+  portEXIT_CRITICAL(&stateMux);
+  return changed;
+}
+
+size_t Session::actionCount(size_t index) const {
+  if (xSemaphoreTake(modelMutex, pdMS_TO_TICKS(50)) != pdTRUE) {
+    return 0;
+  }
+  const size_t count = model.actionCount(index);
+  xSemaphoreGive(modelMutex);
+  return count;
+}
+
+bool Session::actionRow(size_t index, size_t slot, ActionRowView& view) const {
+  if (xSemaphoreTake(modelMutex, pdMS_TO_TICKS(50)) != pdTRUE) {
+    return false;
+  }
+  ActionItem now{};
+  ActionItem before{};
+  const bool valid = model.action(index, slot, now, before);
+  if (valid) {
+    copyText(view.name, sizeof(view.name), actionName(now.action));
+    actionArgument(now, view.value, sizeof(view.value));
+    view.changed = now.action != before.action || now.argument != before.argument;
+    view.editable = isServoAction(now.action) && keyTable()[index].remoteWritable;
+  }
+  xSemaphoreGive(modelMutex);
+  return valid;
+}
+
+bool Session::adjustAction(size_t index, size_t slot, int direction, int32_t multiplier) {
+  if (xSemaphoreTake(modelMutex, pdMS_TO_TICKS(50)) != pdTRUE) {
+    return false;
+  }
+  const bool changed = model.adjustAction(index, slot, direction, multiplier);
   const size_t pending = model.pendingCount();
   xSemaphoreGive(modelMutex);
   portENTER_CRITICAL(&stateMux);
@@ -685,8 +725,13 @@ bool Session::row(size_t index, RowView& view) const {
     if (diff.key >= 0) {
       const KeyInfo& info = keyTable()[diff.key];
       copyText(view.label, sizeof(view.label), info.label);
-      displayValue(info, model.current(static_cast<size_t>(diff.key)), view.from, sizeof(view.from));
-      displayValue(info, model.pending(static_cast<size_t>(diff.key)), view.to, sizeof(view.to));
+      if (info.kind == Kind::kActions) {
+        describeActionChange(model.current(static_cast<size_t>(diff.key)), model.pending(static_cast<size_t>(diff.key)),
+                             view.from, sizeof(view.from), view.to, sizeof(view.to));
+      } else {
+        displayValue(info, model.current(static_cast<size_t>(diff.key)), view.from, sizeof(view.from));
+        displayValue(info, model.pending(static_cast<size_t>(diff.key)), view.to, sizeof(view.to));
+      }
     } else {
       copyText(view.label, sizeof(view.label), diff.name);
       view.from[0] = '\0';

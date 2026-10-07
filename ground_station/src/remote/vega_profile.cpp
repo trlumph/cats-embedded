@@ -298,6 +298,107 @@ void displayValue(const KeyInfo& info, const char* canonical, char* out, size_t 
   copyText(out, capacity, canonical);
 }
 
+namespace {
+
+// flight_computer/src/util/actions.hpp action_function_e
+constexpr const char* kActionNames[] = {"None", "Delay", "Pyro 1", "Pyro 2", "I/O", "Servo 1", "Servo 2", "Recorder"};
+constexpr size_t kActionNameCount = sizeof(kActionNames) / sizeof(kActionNames[0]);
+constexpr int16_t kActionDelay = 1;
+constexpr int16_t kActionServoOne = 5;
+constexpr int16_t kActionServoTwo = 6;
+constexpr int16_t kActionRecorder = 7;
+
+/// Parses an action list; missing trailing numbers are zero (like the Vega CLI).
+bool parseActionNumbers(const char* canonical, int16_t* numbers) {
+  const char* cursor = canonical;
+  for (size_t index = 0; index < kActionCount; ++index) {
+    numbers[index] = 0;
+  }
+  for (size_t index = 0; index < kActionCount; ++index) {
+    char* end = nullptr;
+    const long long value = strtoll(cursor, &end, 10);
+    if (end == cursor || value < INT16_MIN || value > INT16_MAX) {
+      return false;
+    }
+    numbers[index] = static_cast<int16_t>(value);
+    if (*end == '\0') {
+      return true;
+    }
+    if (*end != ',' || index + 1 == kActionCount) {
+      return false;
+    }
+    cursor = end + 1;
+  }
+  return true;
+}
+
+}  // namespace
+
+size_t decodeActions(const char* canonical, ActionItem* items, size_t capacity) {
+  int16_t numbers[kActionCount]{};
+  if (canonical == nullptr || !parseActionNumbers(canonical, numbers)) {
+    return 0;
+  }
+  size_t count = 0;
+  for (size_t slot = 0; slot < kActionSlots && count < capacity; ++slot) {
+    if (numbers[slot * 2] == 0) {
+      break;
+    }
+    items[count++] = {numbers[slot * 2], numbers[slot * 2 + 1]};
+  }
+  return count;
+}
+
+const char* actionName(int16_t action) {
+  return action >= 0 && static_cast<size_t>(action) < kActionNameCount ? kActionNames[action] : "Unknown";
+}
+
+bool isServoAction(int16_t action) { return action == kActionServoOne || action == kActionServoTwo; }
+
+void actionArgument(const ActionItem& item, char* out, size_t capacity) {
+  char number[24]{};
+  formatInt64(item.argument, number, sizeof(number));
+  if (item.action == kActionDelay) {
+    snprintf(out, capacity, "%s ms", number);
+  } else if (isServoAction(item.action)) {
+    copyText(out, capacity, number);
+  } else if (item.action == kActionRecorder) {
+    constexpr const char* kStates[] = {"OFF", "PREFILL", "ON"};
+    copyText(out, capacity, item.argument >= 0 && item.argument <= 2 ? kStates[item.argument] : number);
+  } else if (item.action >= 2 && item.action <= 4) {
+    copyText(out, capacity, item.argument == 0 ? "OFF" : (item.argument == 1 ? "ON" : number));
+  } else {
+    copyText(out, capacity, number);
+  }
+}
+
+void describeActionChange(const char* from, const char* to, char* outFrom, size_t fromCapacity, char* outTo,
+                          size_t toCapacity) {
+  ActionItem before[kActionSlots]{};
+  ActionItem after[kActionSlots]{};
+  const size_t beforeCount = decodeActions(from, before, kActionSlots);
+  const size_t afterCount = decodeActions(to, after, kActionSlots);
+  size_t differences = 0;
+  size_t changedSlot = 0;
+  if (beforeCount == afterCount) {
+    for (size_t slot = 0; slot < afterCount; ++slot) {
+      if (before[slot].action != after[slot].action || before[slot].argument != after[slot].argument) {
+        ++differences;
+        changedSlot = slot;
+      }
+    }
+  }
+  if (differences == 1 && before[changedSlot].action == after[changedSlot].action) {
+    char value[24]{};
+    actionArgument(before[changedSlot], value, sizeof(value));
+    snprintf(outFrom, fromCapacity, "%s %s", actionName(before[changedSlot].action), value);
+    actionArgument(after[changedSlot], outTo, toCapacity);
+    return;
+  }
+  displayValue(keyTable()[findKey("ev_liftoff", 10)], from, outFrom, fromCapacity);
+  displayValue(keyTable()[findKey("ev_liftoff", 10)], to, outTo, toCapacity);
+}
+
 Model::Model() : values(keyCount()) {}
 
 bool Model::loadText(const char* text, size_t length) {
@@ -419,6 +520,57 @@ bool Model::adjust(size_t index, int direction, int32_t multiplier) {
   }
   copyText(value.pending, kValueSize, next);
   return true;
+}
+
+size_t Model::actionCount(size_t index) const {
+  if (!known(index) || kKeys[index].kind != Kind::kActions) {
+    return 0;
+  }
+  ActionItem items[kActionSlots]{};
+  return decodeActions(values[index].pending, items, kActionSlots);
+}
+
+bool Model::action(size_t index, size_t slot, ActionItem& now, ActionItem& before) const {
+  if (!known(index) || kKeys[index].kind != Kind::kActions) {
+    return false;
+  }
+  ActionItem pendingItems[kActionSlots]{};
+  ActionItem currentItems[kActionSlots]{};
+  const size_t pendingCount = decodeActions(values[index].pending, pendingItems, kActionSlots);
+  const size_t currentCount = decodeActions(values[index].current, currentItems, kActionSlots);
+  if (slot >= pendingCount) {
+    return false;
+  }
+  now = pendingItems[slot];
+  before = slot < currentCount ? currentItems[slot] : ActionItem{};
+  return true;
+}
+
+bool Model::adjustAction(size_t index, size_t slot, int direction, int32_t multiplier) {
+  if (direction == 0 || slot >= kActionSlots || !known(index) || !kKeys[index].remoteWritable ||
+      kKeys[index].kind != Kind::kActions || slot >= actionCount(index)) {
+    return false;
+  }
+  int16_t numbers[kActionCount]{};
+  if (!parseActionNumbers(values[index].pending, numbers) || !isServoAction(numbers[slot * 2])) {
+    return false;
+  }
+  const int32_t now = numbers[slot * 2 + 1];
+  int32_t target = now + (direction > 0 ? 1 : -1) * (multiplier < 1 ? 1 : multiplier);
+  target = target < kServoMin ? kServoMin : (target > kServoMax ? kServoMax : target);
+  if (target == now) {
+    return false;
+  }
+  numbers[slot * 2 + 1] = static_cast<int16_t>(target);
+  char next[kValueSize]{};
+  size_t used = 0;
+  for (size_t position = 0; position < kActionCount; ++position) {
+    if (position > 0) {
+      next[used++] = ',';
+    }
+    used += formatInt64(numbers[position], next + used, sizeof(next) - used);
+  }
+  return setPending(index, next);
 }
 
 bool Model::setPending(size_t index, const char* value) {

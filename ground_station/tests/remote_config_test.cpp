@@ -584,6 +584,82 @@ void testNumberFormatting() {
   check(strcmp(model.pending(static_cast<size_t>(servo)), "750") == 0, "float imported as integer");
 }
 
+void testActionView() {
+  const auto& keys = VegaConfig::keyTable();
+  VegaConfig::Model model;
+  const char* text =
+      "#board=CATS Vega\n#fw=3.0.2+gscfg.1\n#tele=1.2.0\n"
+      "ev_liftoff=7,2,0,0,0,0,0,0,0,0,0,0,0,0,0,0\n"
+      "ev_apogee=5,160,6,160,0,0,0,0,0,0,0,0,0,0,0,0\n"
+      "ev_main_deployment=3,1,2,1,1,1000,2,0,3,0,0,0,0,0,0,0\n"
+      "ev_touchdown=0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0\n";
+  check(model.loadText(text, strlen(text)), "load actions");
+  const auto liftoff = static_cast<size_t>(VegaConfig::findKey("ev_liftoff", 10));
+  const auto apogee = static_cast<size_t>(VegaConfig::findKey("ev_apogee", 9));
+  const auto main = static_cast<size_t>(VegaConfig::findKey("ev_main_deployment", 18));
+  const auto touchdown = static_cast<size_t>(VegaConfig::findKey("ev_touchdown", 12));
+  check(model.actionCount(liftoff) == 1 && model.actionCount(apogee) == 2 && model.actionCount(main) == 5 &&
+            model.actionCount(touchdown) == 0,
+        "action counts");
+
+  const char* expected[][2] = {{"Pyro 2", "ON"}, {"Pyro 1", "ON"}, {"Delay", "1000 ms"}, {"Pyro 1", "OFF"},
+                               {"Pyro 2", "OFF"}};
+  for (size_t slot = 0; slot < 5; ++slot) {
+    VegaConfig::ActionItem now{};
+    VegaConfig::ActionItem before{};
+    check(model.action(main, slot, now, before), "decode main action");
+    char value[24]{};
+    VegaConfig::actionArgument(now, value, sizeof(value));
+    check(strcmp(VegaConfig::actionName(now.action), expected[slot][0]) == 0 && strcmp(value, expected[slot][1]) == 0,
+          "main action text");
+  }
+  VegaConfig::ActionItem now{};
+  VegaConfig::ActionItem before{};
+  check(model.action(liftoff, 0, now, before), "decode liftoff");
+  char value[24]{};
+  VegaConfig::actionArgument(now, value, sizeof(value));
+  check(strcmp(VegaConfig::actionName(now.action), "Recorder") == 0 && strcmp(value, "ON") == 0, "recorder text");
+
+  // Only servo positions are editable, within 0..1000.
+  check(!model.adjustAction(main, 0, +1), "pyro action not editable");
+  check(!model.adjustAction(main, 2, +1), "delay not editable");
+  check(!model.adjustAction(liftoff, 0, +1), "recorder not editable");
+  check(!model.adjustAction(apogee, 2, +1), "slot past the end not editable");
+  check(model.adjustAction(apogee, 1, +1, 10), "servo 2 +10");
+  check(model.adjustAction(apogee, 1, -1), "servo 2 -1");
+  check(strcmp(model.pending(apogee), "5,160,6,169,0,0,0,0,0,0,0,0,0,0,0,0") == 0, "servo edit keeps the list");
+  check(model.pendingCount() == 1, "one pending change");
+  check(model.action(apogee, 1, now, before) && now.argument == 169 && before.argument == 160, "changed slot");
+  check(model.adjustAction(apogee, 0, -1, 1000), "servo clamps at 0");
+  check(!model.adjustAction(apogee, 0, -1), "servo stays at 0");
+  check(model.adjustAction(apogee, 0, +1, 5000) && model.action(apogee, 0, now, before) && now.argument == 1000,
+        "servo clamps at 1000");
+  check(!model.adjustAction(apogee, 0, +1), "servo stays at 1000");
+
+  char from[40]{};
+  char to[40]{};
+  VegaConfig::describeActionChange("5,160,6,160", "5,160,6,300", from, sizeof(from), to, sizeof(to));
+  check(strcmp(from, "Servo 2 160") == 0 && strcmp(to, "300") == 0, "review text for one servo");
+  VegaConfig::describeActionChange("5,160,6,160", "5,170,6,300", from, sizeof(from), to, sizeof(to));
+  check(strcmp(from, "2 actions") == 0 && strcmp(to, "2 actions") == 0, "review text for several changes");
+  (void)keys;
+
+  // A servo edit is written over the radio like any other change.
+  Link link("TEST1", "TEST1");
+  link.client.startConnect(link.vega.now);
+  check(link.run(200), "connect for action edit");
+  VegaConfig::Model remote;
+  check(readModel(link, &remote), "read for action edit");
+  check(remote.setPending(apogee, "5,160,6,160"), "servo actions pending");
+  remote.acceptPending();
+  check(remote.adjustAction(apogee, 1, +1, 25), "edit servo 2");
+  link.client.startWrite(remote.writeLines(), link.vega.now);
+  check(link.run(600), "write servo edit");
+  check(link.vega.stored.action_array[EV_APOGEE][0] == 5 && link.vega.stored.action_array[EV_APOGEE][1] == 160 &&
+            link.vega.stored.action_array[EV_APOGEE][2] == 6 && link.vega.stored.action_array[EV_APOGEE][3] == 185,
+        "stored servo edit");
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -598,6 +674,7 @@ int main(int argc, char** argv) {
   testLossyLink();
   testProfiles();
   testNumberFormatting();
+  testActionView();
   if (failures != 0) {
     std::cerr << failures << " remote configuration check(s) failed\n";
     return 1;
