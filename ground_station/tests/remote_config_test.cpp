@@ -541,6 +541,49 @@ void testProfiles() {
   check(strcmp(display, "none") == 0, "empty action summary");
 }
 
+void testNumberFormatting() {
+  // Values from a real Vega profile (CATS Configurator 2.0.3). The ESP32 links newlib-nano printf,
+  // so these must not depend on 64-bit printf conversions.
+  const auto& keys = VegaConfig::keyTable();
+  char out[VegaConfig::kValueSize]{};
+  check(VegaConfig::canonicalize(keys[VegaConfig::findKey("main_altitude", 13)], "450", out, sizeof(out)) &&
+            strcmp(out, "450") == 0,
+        "number canonical form");
+  check(VegaConfig::canonicalize(keys[VegaConfig::findKey("timer1_duration", 15)], "1200000", out, sizeof(out)) &&
+            strcmp(out, "1200000") == 0,
+        "large number canonical form");
+  check(VegaConfig::canonicalize(keys[VegaConfig::findKey("ev_main_deployment", 18)],
+                                 "3,1,2,1,1,1000,2,0,3,0,0,0,0,0,0,0", out, sizeof(out)) &&
+            strcmp(out, "3,1,2,1,1,1000,2,0,3,0,0,0,0,0,0,0") == 0,
+        "actions canonical form");
+  check(VegaConfig::canonicalize(keys[VegaConfig::findKey("ev_liftoff", 10)], "7,2", out, sizeof(out)) &&
+            strcmp(out, "7,2,0,0,0,0,0,0,0,0,0,0,0,0,0,0") == 0,
+        "short action list padded");
+
+  VegaConfig::Model model;
+  const char* text =
+      "#board=CATS Vega\n#fw=3.0.2+gscfg.1\n#tele=1.2.0\nmain_altitude=450\nacc_threshold=35\nservo1_init_pos=500\n"
+      "ev_apogee=5,160,6,160,0,0,0,0,0,0,0,0,0,0,0,0\nev_main_deployment=3,1,2,1,1,1000,2,0,3,0,0,0,0,0,0,0\n";
+  check(model.loadText(text, strlen(text)), "load real configuration text");
+  char display[40]{};
+  const int apogee = VegaConfig::findKey("ev_apogee", 9);
+  VegaConfig::displayValue(keys[apogee], model.current(static_cast<size_t>(apogee)), display, sizeof(display));
+  check(strcmp(display, "2 actions") == 0, "apogee actions shown");
+  const int main = VegaConfig::findKey("ev_main_deployment", 18);
+  VegaConfig::displayValue(keys[main], model.current(static_cast<size_t>(main)), display, sizeof(display));
+  check(strcmp(display, "5 actions") == 0, "main actions shown");
+
+  const char* profile = R"({"format": "cats-configurator-profile", "schemaVersion": 1,
+    "source": {"boardModel": "CATS Vega"},
+    "configuration": {"main_altitude": 450.0, "acc_threshold": 35.0, "servo1_init_pos": 750.0},
+    "events": {"ev_apogee": "5,160,6,160,0,0,0,0,0,0,0,0,0,0,0,0"}})";
+  char error[64]{};
+  check(model.importProfile(profile, strlen(profile), error, sizeof(error)), "import Configurator floats");
+  check(model.pendingCount() == 1, "only servo1_init_pos differs");
+  const int servo = VegaConfig::findKey("servo1_init_pos", 15);
+  check(strcmp(model.pending(static_cast<size_t>(servo)), "750") == 0, "float imported as integer");
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -554,6 +597,7 @@ int main(int argc, char** argv) {
   testSafetyGates();
   testLossyLink();
   testProfiles();
+  testNumberFormatting();
   if (failures != 0) {
     std::cerr << failures << " remote configuration check(s) failed\n";
     return 1;

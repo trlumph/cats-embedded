@@ -18,6 +18,42 @@ namespace VegaConfig {
 
 namespace {
 
+// The ESP32 Arduino core links newlib-nano printf (CONFIG_NEWLIB_NANO_FORMAT): a 64-bit conversion
+// prints a literal "ld" and floating point is not reliable, so numbers are formatted by hand.
+size_t formatInt64(int64_t value, char* out, size_t capacity) {
+  char buffer[24]{};
+  size_t index = sizeof(buffer) - 1;
+  const bool negative = value < 0;
+  uint64_t magnitude = negative ? static_cast<uint64_t>(-(value + 1)) + 1U : static_cast<uint64_t>(value);
+  do {
+    buffer[--index] = static_cast<char>('0' + (magnitude % 10U));
+    magnitude /= 10U;
+  } while (magnitude > 0U && index > 1);
+  if (negative) {
+    buffer[--index] = '-';
+  }
+  const size_t length = sizeof(buffer) - 1 - index;
+  if (capacity == 0 || length + 1 > capacity) {
+    if (capacity > 0) {
+      out[0] = '\0';
+    }
+    return 0;
+  }
+  memcpy(out, &buffer[index], length + 1);
+  return length;
+}
+
+/// Formats |number| <= 1e10 with three decimals.
+void formatFixed3(double number, char* out, size_t capacity) {
+  const auto scaled = static_cast<int64_t>(std::llround(number * 1000.0));
+  const bool negative = scaled < 0;
+  const uint64_t magnitude = negative ? static_cast<uint64_t>(-scaled) : static_cast<uint64_t>(scaled);
+  char integer[24]{};
+  formatInt64(static_cast<int64_t>(magnitude / 1000U), integer, sizeof(integer));
+  const auto fraction = static_cast<unsigned>(magnitude % 1000U);
+  snprintf(out, capacity, "%s%s.%03u", negative ? "-" : "", integer, fraction);
+}
+
 constexpr const char* kProfileFormat = "cats-configurator-profile";
 constexpr int kProfileSchemaVersion = 1;
 
@@ -166,7 +202,7 @@ bool canonicalize(const KeyInfo& info, const char* value, char* out, size_t capa
       if (!parseInteger(text, length, &number) || number < info.min || number > info.max) {
         return false;
       }
-      snprintf(out, capacity, "%" PRId64, number);
+      formatInt64(number, out, capacity);
       return true;
     }
     case Kind::kOnOff:
@@ -211,12 +247,18 @@ bool canonicalize(const KeyInfo& info, const char* value, char* out, size_t capa
       }
       size_t used = 0;
       for (size_t index = 0; index < kActionCount; ++index) {
-        const int written =
-            snprintf(out + used, capacity - used, index == 0 ? "%" PRId64 : ",%" PRId64, numbers[index]);
-        if (written < 0 || static_cast<size_t>(written) >= capacity - used) {
+        if (index > 0) {
+          if (used + 2 > capacity) {
+            return false;
+          }
+          out[used++] = ',';
+          out[used] = '\0';
+        }
+        const size_t written = formatInt64(numbers[index], out + used, capacity - used);
+        if (written == 0) {
           return false;
         }
-        used += static_cast<size_t>(written);
+        used += written;
       }
       return true;
     }
@@ -357,7 +399,7 @@ bool Model::adjust(size_t index, int direction, int32_t multiplier) {
       if (target == now) {
         return false;
       }
-      snprintf(next, sizeof(next), "%" PRId64, target);
+      formatInt64(target, next, sizeof(next));
     } break;
     case Kind::kOnOff:
       copyText(next, sizeof(next), strcmp(value.pending, "ON") == 0 ? "OFF" : "ON");
@@ -488,7 +530,7 @@ bool Model::importProfile(const char* json, size_t length, char* error, size_t e
     if (item.value.is<bool>()) {
       copyText(text, sizeof(text), item.value.as<bool>() ? "ON" : "OFF");
     } else if (item.value.is<int64_t>()) {
-      snprintf(text, sizeof(text), "%" PRId64, item.value.as<int64_t>());
+      formatInt64(item.value.as<int64_t>(), text, sizeof(text));
     } else if (item.value.is<double>()) {
       const auto number = item.value.as<double>();
       if (!std::isfinite(number) || std::fabs(number) > 1e10) {
@@ -496,7 +538,7 @@ bool Model::importProfile(const char* json, size_t length, char* error, size_t e
         newNotes.push_back(note);
         continue;
       }
-      snprintf(text, sizeof(text), "%.3f", number);
+      formatFixed3(number, text, sizeof(text));
     } else if (item.value.is<const char*>()) {
       const auto* value = item.value.as<const char*>();
       if (strlen(value) >= sizeof(text) || strpbrk(value, "\r\n") != nullptr) {

@@ -231,6 +231,11 @@ test_rom_bootloader() {
 # Station client over a simulated radio link. Needs ArduinoJson from the dependencies step.
 test_remote_config() {
   local test_binary="$build_dir/remote-config-test"
+  # The ESP32 Arduino core uses newlib-nano printf: 64-bit conversions print a literal "ld".
+  if grep -nE 'PRI[diuxX](64|MAX)|%[-+ 0#]*[0-9.]*(ll|j)[diuxX]' "$project_root"/src/remote/*.cpp; then
+    echo "64-bit printf conversion in src/remote (unsupported by newlib-nano)" >&2
+    return 1
+  fi
   local vega="$repo_root/flight_computer/src"
   local arduinojson="${PLATFORMIO_LIBDEPS_DIR:-$project_root/.pio/libdeps}/ground_station/ArduinoJson/src"
   mkdir -p "$build_dir"

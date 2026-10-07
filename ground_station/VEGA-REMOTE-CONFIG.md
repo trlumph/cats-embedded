@@ -3,7 +3,7 @@
 The Ground Station can read, edit and write the configuration of a CATS Vega over the radio link, exchange
 configuration profiles with the CATS Configurator, and restart the Vega into testing mode for one boot.
 
-Both firmwares must contain this feature: Ground Station `1.3.1+gscfg.1` and Vega `3.0.2+gscfg.1` or newer.
+Both firmwares must contain this feature: Ground Station `1.3.1+gscfg.2` and Vega `3.0.2+gscfg.1` or newer.
 The telemetry (radio) firmware is not changed; receivers and Vega radios on 1.1.3 or 1.2.0 both work.
 
 ## Requirements
